@@ -401,7 +401,9 @@
 
                 // 5. Final Setup
                 if(appConfig.adZoneId) loadAdSdk(appConfig.adZoneId);
-                earningWalletBalance = parseFloat(localStorage.getItem(`earningWallet_${tgUser.id}`) || '0');
+                
+                // FIXED: Load Pending Balance from User State (Database) instead of localStorage
+                earningWalletBalance = parseFloat(userState.pendingBalance || 0);
                 
                 renderUI(); 
                 setupNavigation(); 
@@ -455,6 +457,7 @@
                     username: tgUser.username || '', 
                     photoUrl: photoUrl, 
                     balance: 0, 
+                    pendingBalance: 0, // FIXED: Added database field for pending balance
                     referrals: 0, 
                     referredBy: referralId, 
                     totalEarned: 0, 
@@ -516,6 +519,12 @@
                     userData.lastAdWatchDate = today;
                     needsUpdate = true;
                 }
+                // Ensure pendingBalance exists for old users
+                if (userData.pendingBalance === undefined) {
+                    userData.pendingBalance = 0;
+                    updates.pendingBalance = 0;
+                    needsUpdate = true;
+                }
                 
                 if(needsUpdate) await userRef.update(updates);
             }
@@ -529,6 +538,8 @@
                 if(data) {
                     // Update local state with latest data from DB
                     userState = { ...userState, ...data };
+                    // FIXED: Sync pending balance from DB to local variable
+                    earningWalletBalance = parseFloat(userState.pendingBalance || 0);
                     // Refresh UI to show new balance/referrals instantly
                     renderUI();
                 }
@@ -713,19 +724,22 @@
                 const reward = parseFloat(appConfig.adValue || 0);
                 const today = new Date().toISOString().slice(0, 10);
                 
+                // Update local calculation
                 earningWalletBalance = parseFloat((earningWalletBalance + reward).toFixed(2));
+                
                 const balanceEl = document.getElementById('earning-wallet-balance');
                 if(balanceEl) balanceEl.innerText = earningWalletBalance.toFixed(2);
                 
                 const moveBtn = document.getElementById('move-to-balance-btn');
                 if(moveBtn) moveBtn.disabled = earningWalletBalance < 10;
                 
-                localStorage.setItem(`earningWallet_${tgUser.id}`, earningWalletBalance);
+                // FIXED: Removed localStorage setItem for wallet
 
                 userState.dailyAdCount = (userState.dailyAdCount || 0) + 1;
                 userState.lifetimeAdCount = (userState.lifetimeAdCount || 0) + 1;
                 userState.totalEarned = (userState.totalEarned || 0) + reward;
                 userState.lastAdWatchDate = today;
+                userState.pendingBalance = earningWalletBalance; // Update local state
 
                 const dailyLimit = appConfig.dailyAdLimit || 0;
                 const dailyCounterEl = document.getElementById('daily-ads-watched');
@@ -743,7 +757,8 @@
                     lifetimeAdCount: userState.lifetimeAdCount,
                     totalEarned: userState.totalEarned,
                     breakUntil: userState.breakUntil || 0,
-                    lastAdWatchDate: today 
+                    lastAdWatchDate: today,
+                    pendingBalance: earningWalletBalance // FIXED: Save pending balance to Firebase
                 };
                 
                 const db = firebase.database();
@@ -768,15 +783,26 @@
             btn.disabled = true; btn.innerText = "Processing...";
             
             try {
-                await firebase.database().ref(`users/${tgUser.id}/balance`).set(firebase.database.ServerValue.increment(earningWalletBalance));
+                const db = firebase.database();
+                const updates = {};
+                
+                // FIXED: Atomic update: Add to balance AND reset pendingBalance to 0
+                updates[`users/${tgUser.id}/balance`] = firebase.database.ServerValue.increment(earningWalletBalance);
+                updates[`users/${tgUser.id}/pendingBalance`] = 0;
+
+                await db.ref().update(updates);
+
                 userState.balance += earningWalletBalance;
                 earningWalletBalance = 0;
-                localStorage.setItem(`earningWallet_${tgUser.id}`, '0');
+                userState.pendingBalance = 0;
+                
+                // FIXED: Removed localStorage setItem
                 
                 tg.HapticFeedback.notificationOccurred('success');
                 tg.showAlert("Balance Transfer Successful!");
             } catch(e) {
                 tg.showAlert("Network Error");
+                console.error(e);
             }
             renderUI();
         };
