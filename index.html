@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Orange Rewards 🍊</title>
+    <title>Orange Rewards </title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -331,7 +331,7 @@
         let earningWalletBalance = 0;
         let leaderboardData = { referral: [], earning: [] };
         
-        // ** NEW: Real-time Data Buffer **
+        // ** Real-time Data Buffer **
         let userTransactions = [];
         let historyCache = { pending: [], completed: [], rejected: [] };
 
@@ -393,7 +393,7 @@
                     loadLeaderboards(db)
                 ]);
 
-                // ** NEW: Setup Real-time Listener **
+                // ** Setup Real-time Listener **
                 setupRealtimeHistory(db);
 
                 // 4. Final Setup
@@ -439,9 +439,11 @@
             const safeLastName = tgUser.last_name || '';
 
             if (!userData) {
-                // New User Creation
+                // --- NEW USER REGISTRATION & REFERRAL LOGIC ---
                 const startParam = tg.initDataUnsafe.start_param;
-                const referralId = (startParam && !isNaN(startParam) && startParam != tgUser.id) ? startParam : null;
+                
+                // Check if referral ID is valid and not self-referral
+                const referralId = (startParam && startParam != tgUser.id) ? startParam : null;
                 
                 userData = { 
                     id: tgUser.id, 
@@ -462,20 +464,27 @@
                 };
                 await userRef.set(userData);
                 
+                // --- GIVE REFERRAL BONUS ---
                 if (referralId) {
                     const referrerRef = db.ref(`users/${referralId}`);
-                    const bonusAmount = parseFloat(appConfig.referralBonus || 0);
-                    if (bonusAmount > 0) {
-                        referrerRef.transaction(data => {
-                            if (data) {
-                                data.balance = (data.balance || 0) + bonusAmount;
-                                data.referrals = (data.referrals || 0) + 1;
-                            }
-                            return data;
-                        });
-                    } else {
-                        referrerRef.child('referrals').set(firebase.database.ServerValue.increment(1));
-                    }
+                    // Check if referrer exists to avoid ghost data
+                    referrerRef.once('value', refSnap => {
+                        if (refSnap.exists()) {
+                            const bonusAmount = parseFloat(appConfig.referralBonus || 0);
+                            
+                            // Atomic Transaction to update balance and count
+                            referrerRef.transaction(data => {
+                                if (data) {
+                                    const currentBalance = parseFloat(data.balance || 0);
+                                    const currentReferrals = parseInt(data.referrals || 0);
+                                    
+                                    data.balance = currentBalance + bonusAmount;
+                                    data.referrals = currentReferrals + 1;
+                                }
+                                return data;
+                            });
+                        }
+                    });
                 }
             } else {
                 // Update Profile
@@ -524,43 +533,29 @@
             leaderboardData.earning.reverse();
         };
 
-        // ** UPDATED: Real-time History Listener Function **
-        // This fixes the issue where status doesn't update visually
         const setupRealtimeHistory = (db) => {
             const statuses = ['pending', 'completed', 'rejected'];
 
             statuses.forEach(status => {
-                // .on() will trigger whenever data is added, removed, or changed
                 db.ref(`withdrawals/${status}`).orderByChild('userId').equalTo(tgUser.id)
                 .on('value', (snapshot) => {
                     const tempList = [];
                     snapshot.forEach(child => {
                         let data = child.val();
-                        
-                        // --- BUG FIX START ---
-                        // Force update status based on the folder it is in.
-                        // This handles cases where admin moves data but forgets to update status text.
                         if (status === 'completed') data.status = 'approved'; 
                         if (status === 'rejected') data.status = 'rejected';
-                        // --- BUG FIX END ---
-
                         tempList.push(data);
                     });
 
-                    // 1. Update specific cache
                     historyCache[status] = tempList;
 
-                    // 2. Merge all lists
                     userTransactions = [
                         ...historyCache.pending,
                         ...historyCache.completed,
                         ...historyCache.rejected
                     ];
 
-                    // 3. Sort by timestamp (newest first)
                     userTransactions.sort((a, b) => b.timestamp - a.timestamp);
-
-                    // 4. Update UI
                     renderWithdrawalHistory();
                 });
             });
@@ -840,7 +835,6 @@
                 tg.showAlert("Withdrawal Requested!");
                 e.target.reset();
                 renderUI();
-                // History will update automatically via listener
 
             } catch(err) {
                 tg.showAlert("Error occurred");
@@ -849,7 +843,6 @@
             btn.disabled = false; btn.innerText = "Submit Request";
         };
 
-        // ** UPDATED: History Rendering **
         const renderWithdrawalHistory = () => {
             const el = document.getElementById('withdrawal-history-list');
             if(!userTransactions.length) { el.innerHTML = '<p style="text-align:center; color:#999;">No history found</p>'; return; }
@@ -860,7 +853,6 @@
                 let textColor = '#856404';
                 let statusText = t.status;
 
-                // Robust check for various admin statuses
                 if(statusLower.includes('complete') || statusLower.includes('approv') || statusLower.includes('paid') || statusLower.includes('success')) {
                     statusColor = '#d4edda';
                     textColor = '#155724';
