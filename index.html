@@ -388,7 +388,10 @@
                 // 2. Load User
                 await loadUserData(db);
 
-                // 3. Load Additional Data (Parallel)
+                // 3. Setup REAL-TIME User Sync (For automatic balance update)
+                setupRealtimeUserSync(db);
+
+                // 4. Load Additional Data (Parallel)
                 await Promise.all([
                     loadLeaderboards(db)
                 ]);
@@ -396,7 +399,7 @@
                 // ** Setup Real-time Listener **
                 setupRealtimeHistory(db);
 
-                // 4. Final Setup
+                // 5. Final Setup
                 if(appConfig.adZoneId) loadAdSdk(appConfig.adZoneId);
                 earningWalletBalance = parseFloat(localStorage.getItem(`earningWallet_${tgUser.id}`) || '0');
                 
@@ -478,7 +481,7 @@
                                     const currentBalance = parseFloat(data.balance || 0);
                                     const currentReferrals = parseInt(data.referrals || 0);
                                     
-                                    data.balance = currentBalance + bonusAmount;
+                                    data.balance = currentBalance + bonusAmount; // Auto add to balance
                                     data.referrals = currentReferrals + 1;
                                 }
                                 return data;
@@ -517,6 +520,19 @@
                 if(needsUpdate) await userRef.update(updates);
             }
             userState = userData;
+        };
+
+        // --- NEW: REAL-TIME USER SYNC ---
+        const setupRealtimeUserSync = (db) => {
+            db.ref(`users/${tgUser.id}`).on('value', (snapshot) => {
+                const data = snapshot.val();
+                if(data) {
+                    // Update local state with latest data from DB
+                    userState = { ...userState, ...data };
+                    // Refresh UI to show new balance/referrals instantly
+                    renderUI();
+                }
+            });
         };
         
         const loadLeaderboards = async (db) => {
@@ -573,7 +589,18 @@
             document.getElementById('user-balance').textContent = (userState.balance || 0).toFixed(2);
             
             document.getElementById('daily-ads-watched').textContent = `${userState.dailyAdCount || 0} / ${appConfig.dailyAdLimit || 0}`;
-            document.getElementById('referral-count').textContent = userState.referrals || 0;
+            
+            // --- MODIFIED REFERRAL COUNT DISPLAY ---
+            const refCount = userState.referrals || 0;
+            const refBonus = parseFloat(appConfig.referralBonus || 0);
+            const refEarnings = (refCount * refBonus).toFixed(2);
+            
+            // Show Count AND Earnings
+            document.getElementById('referral-count').innerHTML = `
+                ${refCount} <br>
+                <span style="font-size:0.75rem; color:#2ecc71; font-weight:600;">+${refEarnings} TK</span>
+            `;
+
             document.getElementById('total-ads-watched').textContent = userState.lifetimeAdCount || 0;
             document.getElementById('total-earned').textContent = (userState.totalEarned || 0).toFixed(2);
             
