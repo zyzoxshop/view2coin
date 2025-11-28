@@ -524,7 +524,8 @@
             leaderboardData.earning.reverse();
         };
 
-        // ** NEW: Real-time History Listener Function **
+        // ** UPDATED: Real-time History Listener Function **
+        // This fixes the issue where status doesn't update visually
         const setupRealtimeHistory = (db) => {
             const statuses = ['pending', 'completed', 'rejected'];
 
@@ -534,7 +535,16 @@
                 .on('value', (snapshot) => {
                     const tempList = [];
                     snapshot.forEach(child => {
-                        tempList.push(child.val());
+                        let data = child.val();
+                        
+                        // --- BUG FIX START ---
+                        // Force update status based on the folder it is in.
+                        // This handles cases where admin moves data but forgets to update status text.
+                        if (status === 'completed') data.status = 'approved'; 
+                        if (status === 'rejected') data.status = 'rejected';
+                        // --- BUG FIX END ---
+
+                        tempList.push(data);
                     });
 
                     // 1. Update specific cache
@@ -839,11 +849,29 @@
             btn.disabled = false; btn.innerText = "Submit Request";
         };
 
+        // ** UPDATED: History Rendering **
         const renderWithdrawalHistory = () => {
             const el = document.getElementById('withdrawal-history-list');
             if(!userTransactions.length) { el.innerHTML = '<p style="text-align:center; color:#999;">No history found</p>'; return; }
             
-            el.innerHTML = userTransactions.map(t => `
+            el.innerHTML = userTransactions.map(t => {
+                const statusLower = t.status ? t.status.toLowerCase() : 'pending';
+                let statusColor = '#fff3cd'; // default yellow
+                let textColor = '#856404';
+                let statusText = t.status;
+
+                // Robust check for various admin statuses
+                if(statusLower.includes('complete') || statusLower.includes('approv') || statusLower.includes('paid') || statusLower.includes('success')) {
+                    statusColor = '#d4edda';
+                    textColor = '#155724';
+                    statusText = 'Approved';
+                } else if(statusLower.includes('reject') || statusLower.includes('cancel') || statusLower.includes('decline')) {
+                    statusColor = '#f8d7da';
+                    textColor = '#721c24';
+                    statusText = 'Rejected';
+                }
+
+                return `
                 <div class="history-item">
                     <div class="task-info">
                         <h3>${t.method}</h3>
@@ -851,10 +879,10 @@
                     </div>
                     <div style="text-align:right;">
                         <h3 style="color:var(--primary-color)">-${t.amount}</h3>
-                        <span style="font-size:0.75rem; padding:3px 8px; border-radius:4px; background:${t.status==='completed'?'#d4edda':t.status==='rejected'?'#f8d7da':'#fff3cd'}; color:${t.status==='completed'?'#155724':t.status==='rejected'?'#721c24':'#856404'}">${t.status}</span>
+                        <span style="font-size:0.75rem; padding:3px 8px; border-radius:4px; background:${statusColor}; color:${textColor}; font-weight:600; text-transform:capitalize;">${statusText}</span>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         };
 
         const renderDynamicTasks = () => {
