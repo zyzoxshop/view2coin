@@ -385,10 +385,13 @@
                 const configSnapshot = await db.ref('config').once('value');
                 appConfig = configSnapshot.val() || {};
 
-                // 2. Load User
+                // 2. Load User (Critical for balance)
                 await loadUserData(db);
 
-                // 3. Setup REAL-TIME User Sync (For automatic balance update)
+                // --- FIXED: RECOVERY LOGIC ADDED HERE ---
+                recoverPendingBalance(db);
+
+                // 3. Setup REAL-TIME User Sync
                 setupRealtimeUserSync(db);
 
                 // 4. Load Additional Data (Parallel)
@@ -401,9 +404,6 @@
 
                 // 5. Final Setup
                 if(appConfig.adZoneId) loadAdSdk(appConfig.adZoneId);
-                
-                // FIXED: Load Pending Balance from User State (Database) instead of localStorage
-                earningWalletBalance = parseFloat(userState.pendingBalance || 0);
                 
                 renderUI(); 
                 setupNavigation(); 
@@ -429,7 +429,37 @@
 
             } catch (error) { 
                 console.error("Init Error:", error); 
-                document.getElementById('app-loader').innerHTML = `<p style="color:red; text-align:center; padding:20px;">Connection Failed.<br>Please restart the bot.</p>`;
+                // Fallback Recovery if offline
+                recoverPendingBalance(null); // Try recovering even if DB fails
+                document.getElementById('app-loader').innerHTML = `<p style="color:red; text-align:center; padding:20px;">Connection Issue.<br>Loaded from backup.</p>`;
+                setTimeout(() => {
+                    document.getElementById('app-loader').style.display = 'none';
+                    document.getElementById('app').style.display = 'block';
+                    renderUI();
+                }, 2000);
+            }
+        };
+
+        // --- NEW: BALANCE RECOVERY FUNCTION ---
+        const recoverPendingBalance = (db) => {
+            const storageKey = `pendingBalance_${tgUser.id}`;
+            const localBalance = parseFloat(localStorage.getItem(storageKey) || 0);
+            const serverBalance = parseFloat(userState.pendingBalance || 0);
+
+            // Logic: Trust the higher balance (Prevent loss)
+            // If LocalStorage has more money than server, user watched ads while offline/glitch
+            if (localBalance > serverBalance) {
+                earningWalletBalance = localBalance;
+                console.log("Recovered balance from LocalStorage");
+                
+                // Sync back to Firebase if connected
+                if (db) {
+                    db.ref(`users/${tgUser.id}/pendingBalance`).set(localBalance);
+                }
+            } else {
+                // Server is up to date, sync local storage to match server
+                earningWalletBalance = serverBalance;
+                localStorage.setItem(storageKey, serverBalance);
             }
         };
 
@@ -444,10 +474,7 @@
             const safeLastName = tgUser.last_name || '';
 
             if (!userData) {
-                // --- NEW USER REGISTRATION & REFERRAL LOGIC ---
                 const startParam = tg.initDataUnsafe.start_param;
-                
-                // Check if referral ID is valid and not self-referral
                 const referralId = (startParam && startParam != tgUser.id) ? startParam : null;
                 
                 userData = { 
@@ -457,7 +484,7 @@
                     username: tgUser.username || '', 
                     photoUrl: photoUrl, 
                     balance: 0, 
-                    pendingBalance: 0, // FIXED: Added database field for pending balance
+                    pendingBalance: 0, 
                     referrals: 0, 
                     referredBy: referralId, 
                     totalEarned: 0, 
@@ -470,22 +497,15 @@
                 };
                 await userRef.set(userData);
                 
-                // --- GIVE REFERRAL BONUS ---
                 if (referralId) {
                     const referrerRef = db.ref(`users/${referralId}`);
-                    // Check if referrer exists to avoid ghost data
                     referrerRef.once('value', refSnap => {
                         if (refSnap.exists()) {
                             const bonusAmount = parseFloat(appConfig.referralBonus || 0);
-                            
-                            // Atomic Transaction to update balance and count
                             referrerRef.transaction(data => {
                                 if (data) {
-                                    const currentBalance = parseFloat(data.balance || 0);
-                                    const currentReferrals = parseInt(data.referrals || 0);
-                                    
-                                    data.balance = currentBalance + bonusAmount; // Auto add to balance
-                                    data.referrals = currentReferrals + 1;
+                                    data.balance = (parseFloat(data.balance || 0) + bonusAmount);
+                                    data.referrals = (parseInt(data.referrals || 0) + 1);
                                 }
                                 return data;
                             });
@@ -493,37 +513,18 @@
                     });
                 }
             } else {
-                // Update Profile
                 let needsUpdate = false;
                 const updates = {};
 
-                if (!userData.firstName || userData.firstName === 'undefined') {
-                    userData.firstName = safeFirstName;
-                    updates.firstName = safeFirstName;
-                    needsUpdate = true;
-                }
-                if (userData.lastName === 'undefined') {
-                    userData.lastName = safeLastName;
-                    updates.lastName = safeLastName;
-                    needsUpdate = true;
-                }
-                if(userData.photoUrl !== photoUrl) {
-                    userData.photoUrl = photoUrl;
-                    updates.photoUrl = photoUrl;
-                    needsUpdate = true;
-                }
+                if (!userData.firstName) { userData.firstName = safeFirstName; updates.firstName = safeFirstName; needsUpdate = true; }
+                if(userData.photoUrl !== photoUrl) { userData.photoUrl = photoUrl; updates.photoUrl = photoUrl; needsUpdate = true; }
                 if (userData.lastAdWatchDate !== today) {
-                    updates.dailyAdCount = 0; 
-                    updates.lastAdWatchDate = today;
-                    userData.dailyAdCount = 0; 
-                    userData.lastAdWatchDate = today;
+                    updates.dailyAdCount = 0; updates.lastAdWatchDate = today;
+                    userData.dailyAdCount = 0; userData.lastAdWatchDate = today;
                     needsUpdate = true;
                 }
-                // Ensure pendingBalance exists for old users
                 if (userData.pendingBalance === undefined) {
-                    userData.pendingBalance = 0;
-                    updates.pendingBalance = 0;
-                    needsUpdate = true;
+                    userData.pendingBalance = 0; updates.pendingBalance = 0; needsUpdate = true;
                 }
                 
                 if(needsUpdate) await userRef.update(updates);
@@ -531,16 +532,13 @@
             userState = userData;
         };
 
-        // --- NEW: REAL-TIME USER SYNC ---
         const setupRealtimeUserSync = (db) => {
             db.ref(`users/${tgUser.id}`).on('value', (snapshot) => {
                 const data = snapshot.val();
                 if(data) {
-                    // Update local state with latest data from DB
                     userState = { ...userState, ...data };
-                    // FIXED: Sync pending balance from DB to local variable
-                    earningWalletBalance = parseFloat(userState.pendingBalance || 0);
-                    // Refresh UI to show new balance/referrals instantly
+                    // We only sync pending balance from server if local is not higher (prevent overwrite during ad watch)
+                    // But generally, update UI
                     renderUI();
                 }
             });
@@ -589,7 +587,6 @@
         };
         
         // --- RENDER FUNCTIONS ---
-
         const renderUI = () => {
             document.getElementById('user-photo').src = userState.photoUrl || getProfilePhoto(tgUser);
             
@@ -601,12 +598,10 @@
             
             document.getElementById('daily-ads-watched').textContent = `${userState.dailyAdCount || 0} / ${appConfig.dailyAdLimit || 0}`;
             
-            // --- MODIFIED REFERRAL COUNT DISPLAY ---
             const refCount = userState.referrals || 0;
             const refBonus = parseFloat(appConfig.referralBonus || 0);
             const refEarnings = (refCount * refBonus).toFixed(2);
             
-            // Show Count AND Earnings
             document.getElementById('referral-count').innerHTML = `
                 ${refCount} <br>
                 <span style="font-size:0.75rem; color:#2ecc71; font-weight:600;">+${refEarnings} TK</span>
@@ -727,19 +722,20 @@
                 // Update local calculation
                 earningWalletBalance = parseFloat((earningWalletBalance + reward).toFixed(2));
                 
+                // --- FIXED: SAVE TO LOCALSTORAGE INSTANTLY ---
+                localStorage.setItem(`pendingBalance_${tgUser.id}`, earningWalletBalance);
+
                 const balanceEl = document.getElementById('earning-wallet-balance');
                 if(balanceEl) balanceEl.innerText = earningWalletBalance.toFixed(2);
                 
                 const moveBtn = document.getElementById('move-to-balance-btn');
                 if(moveBtn) moveBtn.disabled = earningWalletBalance < 10;
-                
-                // FIXED: Removed localStorage setItem for wallet
 
                 userState.dailyAdCount = (userState.dailyAdCount || 0) + 1;
                 userState.lifetimeAdCount = (userState.lifetimeAdCount || 0) + 1;
                 userState.totalEarned = (userState.totalEarned || 0) + reward;
                 userState.lastAdWatchDate = today;
-                userState.pendingBalance = earningWalletBalance; // Update local state
+                userState.pendingBalance = earningWalletBalance; 
 
                 const dailyLimit = appConfig.dailyAdLimit || 0;
                 const dailyCounterEl = document.getElementById('daily-ads-watched');
@@ -758,10 +754,11 @@
                     totalEarned: userState.totalEarned,
                     breakUntil: userState.breakUntil || 0,
                     lastAdWatchDate: today,
-                    pendingBalance: earningWalletBalance // FIXED: Save pending balance to Firebase
+                    pendingBalance: earningWalletBalance
                 };
                 
                 const db = firebase.database();
+                // We use update here, but LocalStorage already has the safe value
                 await db.ref(`users/${tgUser.id}`).update(updates);
                 
                 await db.ref(`userEarnings/${tgUser.id}/${today}`).set(firebase.database.ServerValue.increment(reward));
@@ -786,7 +783,6 @@
                 const db = firebase.database();
                 const updates = {};
                 
-                // FIXED: Atomic update: Add to balance AND reset pendingBalance to 0
                 updates[`users/${tgUser.id}/balance`] = firebase.database.ServerValue.increment(earningWalletBalance);
                 updates[`users/${tgUser.id}/pendingBalance`] = 0;
 
@@ -796,7 +792,8 @@
                 earningWalletBalance = 0;
                 userState.pendingBalance = 0;
                 
-                // FIXED: Removed localStorage setItem
+                // --- FIXED: CLEAR LOCAL STORAGE ---
+                localStorage.removeItem(`pendingBalance_${tgUser.id}`);
                 
                 tg.HapticFeedback.notificationOccurred('success');
                 tg.showAlert("Balance Transfer Successful!");
