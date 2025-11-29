@@ -242,9 +242,8 @@
                     <div id="earnings-chart" class="chart"></div>
                     <div id="earnings-chart-labels" class="chart-labels"></div>
                 </div>
-
-                <div id="dynamic-links-container" style="margin-top: 20px;"></div>
-            </div>
+                
+                </div>
 
             <div id="tasks-page" class="page">
                 <div class="earning-wallet-card" style="background: var(--text-dark); color: #fff;">
@@ -414,15 +413,19 @@
                     document.getElementById('app-loader').style.display = 'none';
                     document.getElementById('app').style.display = 'block';
                     
-                    if (appConfig.welcomeMessage && !userState.welcomed) {
+                    // --- WELCOME MESSAGE FIX IS HERE ---
+                    const welcomeMsg = appConfig.welcomeMessage || appConfig.homeNote || appConfig.notice;
+                    
+                    if (welcomeMsg && !userState.welcomed) {
                         showPopup(`
                             <div style="text-align:center;">
                                 <i class="fas fa-gift" style="font-size:3rem; color:#FF6B6B; margin-bottom:10px;"></i>
                                 <h2>Welcome!</h2>
-                                <p>${appConfig.welcomeMessage}</p>
-                                <button class="action-btn" onclick="document.getElementById('popup').style.display='none'" style="margin-top:15px; width:100%;">Let's Go!</button>
+                                <p style="margin-top:10px; color:#555;">${welcomeMsg}</p>
+                                <button class="action-btn" onclick="document.getElementById('popup').style.display='none'" style="margin-top:20px; width:100%;">Let's Go!</button>
                             </div>
                         `);
+                        // Set welcomed to true so they don't see it again
                         db.ref(`users/${tgUser.id}/welcomed`).set(true);
                     }
                 }, 800);
@@ -446,18 +449,12 @@
             const localBalance = parseFloat(localStorage.getItem(storageKey) || 0);
             const serverBalance = parseFloat(userState.pendingBalance || 0);
 
-            // Logic: Trust the higher balance (Prevent loss)
-            // If LocalStorage has more money than server, user watched ads while offline/glitch
             if (localBalance > serverBalance) {
                 earningWalletBalance = localBalance;
-                console.log("Recovered balance from LocalStorage");
-                
-                // Sync back to Firebase if connected
                 if (db) {
                     db.ref(`users/${tgUser.id}/pendingBalance`).set(localBalance);
                 }
             } else {
-                // Server is up to date, sync local storage to match server
                 earningWalletBalance = serverBalance;
                 localStorage.setItem(storageKey, serverBalance);
             }
@@ -537,8 +534,6 @@
                 const data = snapshot.val();
                 if(data) {
                     userState = { ...userState, ...data };
-                    // We only sync pending balance from server if local is not higher (prevent overwrite during ad watch)
-                    // But generally, update UI
                     renderUI();
                 }
             });
@@ -615,11 +610,11 @@
             
             renderAdTask(); 
             renderAdProgress(); 
-            renderDynamicTasks(); 
+            renderDynamicTasks(); // Modified to include links here
             renderReferralSection(); 
             renderWithdrawSection(); 
             renderEarningsGraph(); 
-            renderDynamicLinks();
+            // renderDynamicLinks(); <-- REMOVED FROM HOME
             renderLeaderboard(); 
         };
         
@@ -713,16 +708,19 @@
             showPopup(`<div class="spinner" style="margin:0 auto 15px;"></div><h3>Loading Ad...</h3>`);
             
             try {
-                await adFn();
+                const adSeen = await adFn();
                 closePopup();
                 
+                if (!adSeen) {
+                    tg.showAlert("You must watch the full ad to earn reward!");
+                    return; 
+                }
+
                 const reward = parseFloat(appConfig.adValue || 0);
                 const today = new Date().toISOString().slice(0, 10);
                 
-                // Update local calculation
                 earningWalletBalance = parseFloat((earningWalletBalance + reward).toFixed(2));
                 
-                // --- FIXED: SAVE TO LOCALSTORAGE INSTANTLY ---
                 localStorage.setItem(`pendingBalance_${tgUser.id}`, earningWalletBalance);
 
                 const balanceEl = document.getElementById('earning-wallet-balance');
@@ -758,9 +756,7 @@
                 };
                 
                 const db = firebase.database();
-                // We use update here, but LocalStorage already has the safe value
                 await db.ref(`users/${tgUser.id}`).update(updates);
-                
                 await db.ref(`userEarnings/${tgUser.id}/${today}`).set(firebase.database.ServerValue.increment(reward));
 
                 tg.HapticFeedback.notificationOccurred('success');
@@ -792,7 +788,6 @@
                 earningWalletBalance = 0;
                 userState.pendingBalance = 0;
                 
-                // --- FIXED: CLEAR LOCAL STORAGE ---
                 localStorage.removeItem(`pendingBalance_${tgUser.id}`);
                 
                 tg.HapticFeedback.notificationOccurred('success');
@@ -927,29 +922,51 @@
             `}).join('');
         };
 
+        // --- MODIFIED FUNCTION HERE ---
         const renderDynamicTasks = () => {
             const container = document.getElementById('dynamic-tasks-container');
             container.innerHTML = '';
-            if (!appConfig.tasks) return;
             
-            Object.entries(appConfig.tasks).forEach(([key, task]) => {
-                const claimed = userState.completedTasks && userState.completedTasks[key];
-                const div = document.createElement('div');
-                div.className = 'task-container';
-                div.innerHTML = `
-                    <img class="task-icon-img" src="${task.icon}">
-                    <div class="task-info">
-                        <h3>${task.name}</h3>
-                        <p>+${task.reward} TK</p>
-                    </div>
-                    <button class="action-btn" ${claimed ? 'disabled' : ''}>${claimed ? 'Claimed' : 'Start'}</button>
-                `;
-                
-                if(!claimed) {
-                    div.querySelector('button').onclick = () => handleBonusTask(key, task);
-                }
-                container.appendChild(div);
-            });
+            // 1. Render REWARD TASKS (Existing Logic)
+            if (appConfig.tasks) {
+                Object.entries(appConfig.tasks).forEach(([key, task]) => {
+                    const claimed = userState.completedTasks && userState.completedTasks[key];
+                    const div = document.createElement('div');
+                    div.className = 'task-container';
+                    div.innerHTML = `
+                        <img class="task-icon-img" src="${task.icon}">
+                        <div class="task-info">
+                            <h3>${task.name}</h3>
+                            <p>+${task.reward} TK</p>
+                        </div>
+                        <button class="action-btn" ${claimed ? 'disabled' : ''}>${claimed ? 'Claimed' : 'Start'}</button>
+                    `;
+                    
+                    if(!claimed) {
+                        div.querySelector('button').onclick = () => handleBonusTask(key, task);
+                    }
+                    container.appendChild(div);
+                });
+            }
+
+            // 2. Render LINKS (Moved from Home Page)
+            if (appConfig.links) {
+                Object.values(appConfig.links).forEach(link => {
+                    const div = document.createElement('div');
+                    div.className = 'task-container';
+                    // We render it similar to tasks, but without reward logic
+                    // This uses the image/icon from the link
+                    div.innerHTML = `
+                        <img class="task-icon-img" src="${link.icon || 'https://img.icons8.com/color/48/link.png'}" onerror="this.src='https://img.icons8.com/color/48/link.png'">
+                        <div class="task-info">
+                            <h3>${link.name}</h3>
+                            <p>Visit Link</p>
+                        </div>
+                        <button class="action-btn" onclick="window.Telegram.WebApp.openLink('${link.url}')">Visit</button>
+                    `;
+                    container.appendChild(div);
+                });
+            }
         };
         
         const handleBonusTask = (key, task) => {
@@ -974,22 +991,6 @@
                     renderUI();
                 } catch(e) { closePopup(); }
             }, 5000);
-        };
-
-        const renderDynamicLinks = () => {
-             const container = document.getElementById('dynamic-links-container');
-             container.innerHTML = '';
-             if(!appConfig.links) return;
-             
-             Object.values(appConfig.links).forEach(link => {
-                 container.innerHTML += `
-                    <div class="task-container" onclick="window.Telegram.WebApp.openLink('${link.url}')" style="cursor:pointer;">
-                        <img class="task-icon-img" src="${link.icon}">
-                        <div class="task-info"><h3>${link.name}</h3></div>
-                        <i class="fas fa-chevron-right" style="color:#ccc;"></i>
-                    </div>
-                 `;
-             });
         };
 
         // --- NAVIGATION ---
