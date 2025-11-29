@@ -242,13 +242,14 @@
                     <div id="earnings-chart" class="chart"></div>
                     <div id="earnings-chart-labels" class="chart-labels"></div>
                 </div>
-                
-                </div>
+            </div>
 
             <div id="tasks-page" class="page">
                 <div class="earning-wallet-card" style="background: var(--text-dark); color: #fff;">
                     <h3 style="color: #ccc; font-size: 0.9rem;">Pending Balance</h3>
-                    <p style="font-size: 2.5rem; font-weight: 700; margin: 10px 0;"><span id="earning-wallet-balance">0.00</span> <span style="font-size: 1rem;">TK</span></p>
+                    <p style="font-size: 2.5rem; font-weight: 700; margin: 10px 0;">
+                        <span id="earning-wallet-balance">0.000</span> <span style="font-size: 1rem;">TK</span>
+                    </p>
                     
                     <div style="font-size: 0.8rem; opacity: 0.7; margin-bottom: 15px;">Collect 10 TK to add to main balance.</div>
                     
@@ -342,13 +343,11 @@
         const showPopup = (content) => { popupBody.innerHTML = content; popup.style.display = 'flex'; };
         const closePopup = () => { popup.style.display = 'none'; };
         
-        // Safe Image Loading Helper
         const getProfilePhoto = (user) => {
             if (user && user.photo_url) return user.photo_url;
             return "https://img.icons8.com/color/96/user-male-circle--v1.png";
         };
 
-        // Ad SDK Loader
         const loadAdSdk = (zoneId) => {
             if (!zoneId) return;
             if (document.querySelector(`script[data-zone='${zoneId}']`)) return;
@@ -360,11 +359,9 @@
             document.body.appendChild(script);
         };
 
-        // Initialize App
         const initApp = async () => {
             tg.ready(); tg.expand();
             
-            // Get User Data Safely with Fallbacks
             tgUser = tg.initDataUnsafe.user || { 
                 id: 123456789, 
                 first_name: "Orange", 
@@ -380,40 +377,29 @@
                 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
                 const db = firebase.database();
                 
-                // 1. Load Config
                 const configSnapshot = await db.ref('config').once('value');
                 appConfig = configSnapshot.val() || {};
 
-                // 2. Load User (Critical for balance)
                 await loadUserData(db);
-
-                // --- FIXED: RECOVERY LOGIC ADDED HERE ---
                 recoverPendingBalance(db);
-
-                // 3. Setup REAL-TIME User Sync
                 setupRealtimeUserSync(db);
 
-                // 4. Load Additional Data (Parallel)
                 await Promise.all([
                     loadLeaderboards(db)
                 ]);
 
-                // ** Setup Real-time Listener **
                 setupRealtimeHistory(db);
 
-                // 5. Final Setup
                 if(appConfig.adZoneId) loadAdSdk(appConfig.adZoneId);
                 
                 renderUI(); 
                 setupNavigation(); 
                 setupEventListeners();
 
-                // Remove Loader
                 setTimeout(() => {
                     document.getElementById('app-loader').style.display = 'none';
                     document.getElementById('app').style.display = 'block';
                     
-                    // --- WELCOME MESSAGE FIX IS HERE ---
                     const welcomeMsg = appConfig.welcomeMessage || appConfig.homeNote || appConfig.notice;
                     
                     if (welcomeMsg && !userState.welcomed) {
@@ -425,15 +411,13 @@
                                 <button class="action-btn" onclick="document.getElementById('popup').style.display='none'" style="margin-top:20px; width:100%;">Let's Go!</button>
                             </div>
                         `);
-                        // Set welcomed to true so they don't see it again
                         db.ref(`users/${tgUser.id}/welcomed`).set(true);
                     }
                 }, 800);
 
             } catch (error) { 
                 console.error("Init Error:", error); 
-                // Fallback Recovery if offline
-                recoverPendingBalance(null); // Try recovering even if DB fails
+                recoverPendingBalance(null); 
                 document.getElementById('app-loader').innerHTML = `<p style="color:red; text-align:center; padding:20px;">Connection Issue.<br>Loaded from backup.</p>`;
                 setTimeout(() => {
                     document.getElementById('app-loader').style.display = 'none';
@@ -443,7 +427,6 @@
             }
         };
 
-        // --- NEW: BALANCE RECOVERY FUNCTION ---
         const recoverPendingBalance = (db) => {
             const storageKey = `pendingBalance_${tgUser.id}`;
             const localBalance = parseFloat(localStorage.getItem(storageKey) || 0);
@@ -468,7 +451,6 @@
             const today = new Date().toISOString().slice(0, 10);
             const photoUrl = getProfilePhoto(tgUser);
             const safeFirstName = tgUser.first_name || 'Orange';
-            const safeLastName = tgUser.last_name || '';
 
             if (!userData) {
                 const startParam = tg.initDataUnsafe.start_param;
@@ -477,8 +459,6 @@
                 userData = { 
                     id: tgUser.id, 
                     firstName: safeFirstName, 
-                    lastName: safeLastName, 
-                    username: tgUser.username || '', 
                     photoUrl: photoUrl, 
                     balance: 0, 
                     pendingBalance: 0, 
@@ -566,15 +546,8 @@
                         if (status === 'rejected') data.status = 'rejected';
                         tempList.push(data);
                     });
-
                     historyCache[status] = tempList;
-
-                    userTransactions = [
-                        ...historyCache.pending,
-                        ...historyCache.completed,
-                        ...historyCache.rejected
-                    ];
-
+                    userTransactions = [...historyCache.pending, ...historyCache.completed, ...historyCache.rejected];
                     userTransactions.sort((a, b) => b.timestamp - a.timestamp);
                     renderWithdrawalHistory();
                 });
@@ -605,16 +578,18 @@
             document.getElementById('total-ads-watched').textContent = userState.lifetimeAdCount || 0;
             document.getElementById('total-earned').textContent = (userState.totalEarned || 0).toFixed(2);
             
-            document.getElementById('earning-wallet-balance').textContent = earningWalletBalance.toFixed(2);
+            // FIXED: Show 4 decimal places in pending balance so 0.005 is visible
+            const pendingBalEl = document.getElementById('earning-wallet-balance');
+            if(pendingBalEl) pendingBalEl.textContent = earningWalletBalance.toFixed(4);
+            
             document.getElementById('move-to-balance-btn').disabled = earningWalletBalance < 10;
             
             renderAdTask(); 
             renderAdProgress(); 
-            renderDynamicTasks(); // Modified to include links here
+            renderDynamicTasks();
             renderReferralSection(); 
             renderWithdrawSection(); 
             renderEarningsGraph(); 
-            // renderDynamicLinks(); <-- REMOVED FROM HOME
             renderLeaderboard(); 
         };
         
@@ -705,25 +680,19 @@
                 tg.showAlert("Ad not ready. Please wait 5 seconds..."); return;
             }
 
-            // --- TIME CHECK START ---
             const startTime = Date.now(); 
-            // ------------------------
-
             showPopup(`<div class="spinner" style="margin:0 auto 15px;"></div><h3>Loading Ad...</h3>`);
             
             try {
                 const adSeen = await adFn();
-                
-                // --- TIME CHECK LOGIC ---
                 const endTime = Date.now();
                 const duration = endTime - startTime;
 
-                if (duration < 12000) { // 12000 milliseconds = 12 seconds
+                if (duration < 12000) { 
                     closePopup();
                     tg.showAlert("You must watch the ad for at least 12 seconds to get the reward!");
-                    return; // Stop here, do not give reward
+                    return; 
                 }
-                // ------------------------
 
                 closePopup();
                 
@@ -735,12 +704,13 @@
                 const reward = parseFloat(appConfig.adValue || 0);
                 const today = new Date().toISOString().slice(0, 10);
                 
-                earningWalletBalance = parseFloat((earningWalletBalance + reward).toFixed(2));
+                // --- FIXED: Increased precision to 4 decimal places to catch 0.005 ---
+                earningWalletBalance = parseFloat((earningWalletBalance + reward).toFixed(4));
                 
                 localStorage.setItem(`pendingBalance_${tgUser.id}`, earningWalletBalance);
 
                 const balanceEl = document.getElementById('earning-wallet-balance');
-                if(balanceEl) balanceEl.innerText = earningWalletBalance.toFixed(2);
+                if(balanceEl) balanceEl.innerText = earningWalletBalance.toFixed(4); // Display 4 decimals
                 
                 const moveBtn = document.getElementById('move-to-balance-btn');
                 if(moveBtn) moveBtn.disabled = earningWalletBalance < 10;
@@ -776,7 +746,7 @@
                 await db.ref(`userEarnings/${tgUser.id}/${today}`).set(firebase.database.ServerValue.increment(reward));
 
                 tg.HapticFeedback.notificationOccurred('success');
-                showPopup(`<i class="fas fa-check-circle" style="font-size:3rem; color:#2ecc71; margin-bottom:10px;"></i><h3>+${reward} TK</h3><p>Added to earning wallet</p><button class="action-btn" onclick="document.getElementById('popup').style.display='none'">Awesome</button>`);
+                showPopup(`<i class="fas fa-check-circle" style="font-size:3rem; color:#2ecc71; margin-bottom:10px;"></i><h3>+${reward} TK</h3><p>Added to pending balance</p><button class="action-btn" onclick="document.getElementById('popup').style.display='none'">Awesome</button>`);
                 
                 renderUI();
 
@@ -795,6 +765,7 @@
                 const db = firebase.database();
                 const updates = {};
                 
+                // Add pending balance to main balance
                 updates[`users/${tgUser.id}/balance`] = firebase.database.ServerValue.increment(earningWalletBalance);
                 updates[`users/${tgUser.id}/pendingBalance`] = 0;
 
@@ -938,12 +909,10 @@
             `}).join('');
         };
 
-        // --- MODIFIED FUNCTION HERE ---
         const renderDynamicTasks = () => {
             const container = document.getElementById('dynamic-tasks-container');
             container.innerHTML = '';
             
-            // 1. Render REWARD TASKS (Existing Logic)
             if (appConfig.tasks) {
                 Object.entries(appConfig.tasks).forEach(([key, task]) => {
                     const claimed = userState.completedTasks && userState.completedTasks[key];
@@ -965,13 +934,10 @@
                 });
             }
 
-            // 2. Render LINKS (Moved from Home Page)
             if (appConfig.links) {
                 Object.values(appConfig.links).forEach(link => {
                     const div = document.createElement('div');
                     div.className = 'task-container';
-                    // We render it similar to tasks, but without reward logic
-                    // This uses the image/icon from the link
                     div.innerHTML = `
                         <img class="task-icon-img" src="${link.icon || 'https://img.icons8.com/color/48/link.png'}" onerror="this.src='https://img.icons8.com/color/48/link.png'">
                         <div class="task-info">
@@ -1009,7 +975,6 @@
             }, 5000);
         };
 
-        // --- NAVIGATION ---
         const setupNavigation = () => {
             document.querySelectorAll('.nav-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
