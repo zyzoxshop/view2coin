@@ -705,10 +705,26 @@
                 tg.showAlert("Ad not ready. Please wait 5 seconds..."); return;
             }
 
+            // --- TIME CHECK START ---
+            const startTime = Date.now(); 
+            // ------------------------
+
             showPopup(`<div class="spinner" style="margin:0 auto 15px;"></div><h3>Loading Ad...</h3>`);
             
             try {
                 const adSeen = await adFn();
+                
+                // --- TIME CHECK LOGIC ---
+                const endTime = Date.now();
+                const duration = endTime - startTime;
+
+                if (duration < 12000) { // 12000 milliseconds = 12 seconds
+                    closePopup();
+                    tg.showAlert("You must watch the ad for at least 12 seconds to get the reward!");
+                    return; // Stop here, do not give reward
+                }
+                // ------------------------
+
                 closePopup();
                 
                 if (!adSeen) {
